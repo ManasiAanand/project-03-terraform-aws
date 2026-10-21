@@ -1,26 +1,25 @@
-name: Terraform Manual Apply
+name: Terraform Manual Deployment
 
 on:
   workflow_dispatch:
     inputs:
-      plan_run_id:
-        description: "GitHub Actions run ID containing the reviewed terraform-plan artifact"
+      confirm_apply:
+        description: "Type APPLY to confirm deployment"
         required: true
         type: string
 
 permissions:
   contents: read
-  actions: read
 
 env:
   AWS_REGION: ap-south-1
   TF_IN_AUTOMATION: "true"
 
 jobs:
-  apply:
-    name: Apply Reviewed Terraform Plan
+  plan:
+    name: Generate Fresh Terraform Plan
+    if: inputs.confirm_apply == 'APPLY'
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
       - name: Checkout repository
@@ -41,27 +40,22 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
-      - name: Download reviewed plan artifact
-        uses: actions/download-artifact@v4
+      - name: Terraform Format
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Upload plan for review
+        uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan
-          path: .
-          run-id: ${{ inputs.plan_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: terraform-plan-${{ github.run_id }}
+          path: tfplan
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Verify plan exists
-        run: test -s tfplan
-
-      - name: Apply reviewed plan
-        run: terraform apply -input=false tfplan
-
-      - name: Display Terraform outputs
-        run: terraform output
-
-      - name: Validate application
-        run: |
-          URL="$(terraform output -raw web_url)"
-          echo "Testing application at $URL"
-          curl --fail --silent --show-error \
-            --retry 12 --retry-delay 10 --retry-connrefused \
-            "$URL"
+      - name: Display plan summary
+        run: terraform show -no-color tfplan
