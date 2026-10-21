@@ -2,14 +2,10 @@ name: Terraform Manual Deployment
 
 on:
   workflow_dispatch:
-    inputs:
-      confirm_plan:
-        description: "Type PLAN to generate a fresh plan"
-        required: true
-        type: string
 
 permissions:
   contents: read
+  actions: read
 
 env:
   AWS_REGION: ap-south-1
@@ -18,16 +14,15 @@ env:
 jobs:
   plan:
     name: Generate and Upload Terraform Plan
-    if: inputs.confirm_plan == 'PLAN'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -49,13 +44,63 @@ jobs:
       - name: Terraform Plan
         run: terraform plan -input=false -no-color -out=tfplan
 
-      - name: Display plan
+      - name: Display Terraform Plan
         run: terraform show -no-color tfplan
 
-      - name: Upload plan artifact
+      - name: Upload Terraform Plan Artifact
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan-${{ github.run_id }}
           path: tfplan
           retention-days: 1
           if-no-files-found: error
+
+  apply:
+    name: Approved Terraform Apply
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: approval
+
+    steps:
+      - name: Checkout Same Commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Download Exact Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-${{ github.run_id }}
+          path: .
+
+      - name: Verify Plan Artifact
+        run: test -s tfplan
+
+      - name: Apply Reviewed Plan
+        run: terraform apply -input=false -no-color tfplan
+
+      - name: Display Terraform Outputs
+        run: terraform output
+
+      - name: Validate Website
+        shell: bash
+        run: |
+          URL="$(terraform output -raw web_url)"
+          echo "Testing website: $URL"
+          curl --fail --silent --show-error \
+            --retry 12 --retry-delay 10 --retry-connrefused \
+            "$URL"
+          echo "Website validation succeeded."
