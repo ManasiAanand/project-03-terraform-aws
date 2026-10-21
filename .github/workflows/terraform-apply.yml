@@ -1,0 +1,67 @@
+name: Terraform Manual Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: "GitHub Actions run ID containing the reviewed terraform-plan artifact"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  AWS_REGION: ap-south-1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  apply:
+    name: Apply Reviewed Terraform Plan
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Download reviewed plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: .
+          run-id: ${{ inputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify plan exists
+        run: test -s tfplan
+
+      - name: Apply reviewed plan
+        run: terraform apply -input=false tfplan
+
+      - name: Display Terraform outputs
+        run: terraform output
+
+      - name: Validate application
+        run: |
+          URL="$(terraform output -raw web_url)"
+          echo "Testing application at $URL"
+          curl --fail --silent --show-error \
+            --retry 12 --retry-delay 10 --retry-connrefused \
+            "$URL"
